@@ -1,0 +1,270 @@
+services:
+  weaviate:
+    hostname: weaviate
+    command:
+    - --host
+    - 0.0.0.0
+    - --port
+    - '8080'
+    - --scheme
+    - http
+    image: cr.weaviate.io/semitechnologies/weaviate:1.24.6
+    ports:
+    - 8080:8080
+    - 50051:50051
+    volumes:
+    - weaviate_data:/var/lib/weaviate
+    restart: on-failure:0
+    networks:
+      - database-net
+    environment:
+      QUERY_DEFAULTS_LIMIT: 25
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: 'true'
+      PERSISTENCE_DATA_PATH: '/var/lib/weaviate'
+      DEFAULT_VECTORIZER_MODULE: 'text2vec-openai'
+      ENABLE_MODULES: 'text2vec-openai,generative-openai'
+      CLUSTER_HOSTNAME: 'node1'
+  
+  initdb:
+    build:
+      context: ./database
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+    networks:
+      - database-net
+    depends_on:
+      - weaviate
+  
+  redis:
+    image: redis:7.2.4
+    ports:
+      - 6379:6379
+    networks:
+      - hp-net
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.4
+    restart: always
+    hostname: zookeeper
+    ports:
+      - 2181:2181
+    networks:
+      - kafka-net
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+  
+  kafka:
+    image: confluentinc/cp-kafka:7.4.4
+    hostname: kafka
+    ports:
+      - 9092:9092
+      - 29092:29092
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAKFA_LISTENERS: LISTENER_BOB://kafka:29092, LISTENER_FRED://kafka:9092
+      KAFKA_ADVERTISED_LISTENERS: LISTENER_BOB://kafka:29092, LISTENER_FRED://localhost:9092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: LISTENER_BOB:PLAINTEXT, LISTENER_FRED:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: LISTENER_BOB
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_LOG_RETENTION_MS: 60000
+      KAFKA_LOG_RETENTION_CHECK_INTERVAL_MS: 3000
+    networks:
+      - kafka-net
+    healthcheck:
+      test: nc -z localhost 29092 || exit 1
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 15s
+    depends_on:
+      - zookeeper
+
+  initkafka:
+    build:
+      context: ./kafkatopic
+      dockerfile: Dockerfile
+    env_file:
+      - environment/config.env
+    networks:
+      - kafka-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  urlprocessor:
+    build:
+      context: ./urlprocessor
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+    deploy:
+      mode: replicated
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+    depends_on:
+      initkafka:
+        condition: service_completed_successfully
+
+  summarizer:
+    build:
+      context: ./summarizer
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+    deploy:
+      mode: replicated
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+    depends_on:
+      urlprocessor:
+        condition: service_started
+      
+  topicgenerator:
+    build:
+      context: ./topicgenerator
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+    deploy:
+      mode: replicated
+      replicas: 2
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+    depends_on:
+      summarizer:
+        condition: service_started
+
+  hp-urlprocessor:
+    build:
+      context: ./urlprocessor
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+      - environment/hpconfig.env
+    deploy:
+      mode: replicated
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+      - hp-net
+    depends_on:
+      initkafka:
+        condition: service_completed_successfully
+
+  hp-summarizer:
+    build:
+      context: ./summarizer
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+      - environment/hpconfig.env
+    deploy:
+      mode: replicated
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+    depends_on:
+      hp-urlprocessor:
+        condition: service_started
+      
+  hp-topicgenerator:
+    build:
+      context: ./topicgenerator
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+      - environment/hpconfig.env
+    deploy:
+      mode: replicated
+      replicas: 3
+      restart_policy:
+        condition: on-failure
+        delay: 5s
+    networks:
+      - kafka-net
+      - database-net
+      - hp-net
+    depends_on:
+      hp-summarizer:
+        condition: service_started
+
+  newsproducer:
+    build:
+      context: ./newsproducer
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+    networks:
+      - kafka-net
+    depends_on:
+      topicgenerator:
+        condition: service_started
+
+  py-api:
+    build:
+      context: ./py-api
+      dockerfile: Dockerfile
+    env_file:
+      - environment/keys.env
+      - environment/config.env
+      - environment/hpconfig.env
+    networks:
+      - kafka-net
+      - database-net
+      - hp-net
+    ports:
+      - "8000:80"
+    deploy:
+      restart_policy:
+        condition: on-failure
+        delay: 1s
+    depends_on:
+      initkafka:
+        condition: service_completed_successfully
+      redis:
+        condition: service_started
+    
+networks:
+  kafka-net:
+    driver: bridge
+  database-net:
+    driver: bridge
+  hp-net:
+    driver: bridge
+
+volumes:
+  weaviate_data:
