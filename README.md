@@ -36,6 +36,10 @@ Once that's built, then you can run the application:
 docker compose up
 ```
 
+## Architecture
+![NewsfeedArchitecture](https://github.com/ShalinAvlani/NewsfeedApp/assets/7970251/26e6a2d0-6a6e-467c-8052-62e25fafd351)
+Kafka is used as the ETL pipeline to support incoming news URLs from the API and news URLs from the NewsAPI producer in real time. I created a high priority processing pipeline to handle the edge case of certain article topics not existing in the database at retrieval time - this way users just have to wait for a short bit before receiving enough articles related to the topic they queried for.
+
 ### Limitations
 Due to the limited amount of requests you can make at the free tier of the News API, it's difficult to create a full-fledged ETL pipeline to continually process news articles and store them in the database - ideally if there are other sources to index news articles, then these could be added as producers to the Kafka cluster at some point in the future.
 
