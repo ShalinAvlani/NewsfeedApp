@@ -36,6 +36,11 @@ Once that's built, then you can run the application:
 docker compose up
 ```
 
+## Demo
+A video demo can be found [here](https://youtu.be/wReBAfjxeiA).
+
+I created a sample frontend app in Android, where each of the news cards can be tapped to be read aloud. This is to create as close of a replica to the expected user interaction of a voice assistant frontend. The backend was deployed on AWS on a t3.large EC2 instance.
+
 ## Architecture
 ![NewsfeedArchitecture](https://github.com/ShalinAvlani/NewsfeedApp/assets/7970251/26e6a2d0-6a6e-467c-8052-62e25fafd351)
 Kafka is used as the ETL processing pipeline to support incoming news URLs from the API and news URLs from the NewsAPI producer in real time. I created a high priority processing pipeline to handle the edge case of certain article topics not existing in the database at retrieval time - this way users just have to wait for a short bit before receiving enough articles related to the topic they queried for. Here's how the standard ETL pipeline works, with Kafka being used to pass data to each consumer stage:
